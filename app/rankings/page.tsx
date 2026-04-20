@@ -35,42 +35,36 @@ export default async function RankingsPage({
   const selectedPeriod = params.period ?? periods[0] ?? ''
   const activeTab = params.tab ?? 'diamonds'
 
-  // 全ライバー月次データ
+  // 全ライバー月次データ（livers経由でagency_revenueを取得）
   const { data: rankRaw } = await supabase
     .from('monthly_stats')
-    .select('liver_id, diamonds, live_count, valid_live_days, live_time_min, pk_count, new_followers, diamond_achieve, rank_status, livers(display_name, username, group_name, managers(name, email)), agency_revenue(period, streamer_revenue, agency_total_payout)')
+    .select('liver_id, diamonds, live_count, valid_live_days, live_time_min, pk_count, new_followers, diamond_achieve, rank_status, livers(display_name, username, group_name, managers(name, email), agency_revenue(period, streamer_revenue, agency_total_payout))')
     .eq('period', selectedPeriod)
+    .limit(2000)
 
-  type RankRow = {
-    liver_id: number
-    diamonds: number
-    live_count: number
-    valid_live_days: number
-    live_time_min: number
-    pk_count: number
-    new_followers: number
-    diamond_achieve: number
-    rank_status: string | null
-    livers: { display_name?: string; username?: string; group_name?: string; managers?: { name?: string; email?: string } | null } | null
-    agency_revenue: { period: string; streamer_revenue: number; agency_total_payout: number }[]
-  }
-
-  const rankData = (rankRaw ?? [] as RankRow[]).map((r: RankRow) => ({
-    liver_id: r.liver_id,
-    name: r.livers?.display_name ?? r.livers?.username ?? '不明',
-    manager: r.livers?.managers?.name ?? r.livers?.managers?.email ?? '-',
-    group_name: r.livers?.group_name ?? '-',
-    diamonds: r.diamonds ?? 0,
-    live_count: r.live_count ?? 0,
-    valid_live_days: r.valid_live_days ?? 0,
-    live_hours: parseFloat(((r.live_time_min ?? 0) / 60).toFixed(1)),
-    pk_count: r.pk_count ?? 0,
-    new_followers: r.new_followers ?? 0,
-    diamond_achieve: r.diamond_achieve ?? 0,
-    rank_status: r.rank_status ?? '-',
-    streamer_revenue: r.agency_revenue?.find((a) => a.period === selectedPeriod)?.streamer_revenue ?? 0,
-    agency_payout: r.agency_revenue?.find((a) => a.period === selectedPeriod)?.agency_total_payout ?? 0,
-  }))
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rankData = (rankRaw ?? []).map((r: any) => {
+    const liver = Array.isArray(r.livers) ? r.livers[0] : r.livers
+    const manager = Array.isArray(liver?.managers) ? liver?.managers[0] : liver?.managers
+    const arList: { period: string; streamer_revenue: number; agency_total_payout: number }[] = liver?.agency_revenue ?? []
+    const ar = arList.find((a) => a.period === selectedPeriod)
+    return {
+      liver_id: r.liver_id as number,
+      name: (liver?.display_name ?? liver?.username ?? '不明') as string,
+      manager: (manager?.name ?? manager?.email ?? '-') as string,
+      group_name: (liver?.group_name ?? '-') as string,
+      diamonds: (r.diamonds ?? 0) as number,
+      live_count: (r.live_count ?? 0) as number,
+      valid_live_days: (r.valid_live_days ?? 0) as number,
+      live_hours: parseFloat(((r.live_time_min ?? 0) / 60).toFixed(1)),
+      pk_count: (r.pk_count ?? 0) as number,
+      new_followers: (r.new_followers ?? 0) as number,
+      diamond_achieve: (r.diamond_achieve ?? 0) as number,
+      rank_status: (r.rank_status ?? '-') as string,
+      streamer_revenue: ar?.streamer_revenue ?? 0,
+      agency_payout: ar?.agency_total_payout ?? 0,
+    }
+  })
 
   // 目標達成状況
   const { data: goalsRaw } = await supabase

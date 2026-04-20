@@ -27,10 +27,17 @@ export default async function ManagersPage({
   const periods = [...new Set((periodsRaw ?? []).map((r: { period: string }) => r.period))].sort().reverse() as string[]
   const selectedPeriod = params.period ?? periods[0] ?? ''
 
-  // マネージャー別集計
-  const { data: managersRaw } = await supabase
-    .from('managers')
-    .select('id, name, email, livers(id, monthly_stats(period, diamonds, live_count, valid_live_days, new_followers, pk_count, diamond_achieve, liver_id, agency_revenue(period, streamer_revenue, agency_total_payout)))')
+  // マネージャー別集計: monthly_statsからlivers→managersを経由して集計
+  const { data: statsRaw } = await supabase
+    .from('monthly_stats')
+    .select('liver_id, diamonds, live_count, valid_live_days, new_followers, pk_count, diamond_achieve, livers(id, manager_id, managers(id, name, email))')
+    .eq('period', selectedPeriod)
+    .limit(2000)
+
+  // livers一覧（全期間、担当数カウント用）
+  const { data: allLiversRaw } = await supabase
+    .from('livers')
+    .select('id, manager_id')
 
   type ManagerAgg = {
     manager_id: number
@@ -45,33 +52,54 @@ export default async function ManagersPage({
     avg_achieve: number
   }
 
-  const mgrData: ManagerAgg[] = []
-  for (const m of (managersRaw ?? [])) {
-    const mgr = m as { id: number; name: string; email: string | null; livers: { id: number; monthly_stats: { period: string; diamonds: number; live_count: number; valid_live_days: number; new_followers: number; pk_count: number; diamond_achieve: number; liver_id: number }[] }[] }
-    const allStats = mgr.livers.flatMap((l) =>
-      l.monthly_stats.filter((s) => s.period === selectedPeriod)
-    )
-    const totalDiamonds = allStats.reduce((s, r) => s + (r.diamonds ?? 0), 0)
-    const totalLives    = allStats.reduce((s, r) => s + (r.live_count ?? 0), 0)
-    const validDays     = allStats.reduce((s, r) => s + (r.valid_live_days ?? 0), 0)
-    const followers     = allStats.reduce((s, r) => s + (r.new_followers ?? 0), 0)
-    const pk            = allStats.reduce((s, r) => s + (r.pk_count ?? 0), 0)
-    const achieveArr    = allStats.map((r) => r.diamond_achieve ?? 0).filter((v) => v > 0)
-    const avgAchieve    = achieveArr.length > 0 ? achieveArr.reduce((s, v) => s + v, 0) / achieveArr.length : 0
-    const activeLivers  = allStats.filter((r) => (r.live_count ?? 0) > 0 || (r.diamonds ?? 0) > 0).length
-    mgrData.push({
-      manager_id: mgr.id,
-      manager_name: mgr.name ?? mgr.email ?? '不明',
-      total_livers: mgr.livers.length,
-      active_livers: activeLivers,
-      total_diamonds: totalDiamonds,
-      total_lives: totalLives,
-      valid_days: validDays,
-      followers,
-      pk_count: pk,
-      avg_achieve: parseFloat(avgAchieve.toFixed(1)),
-    })
+  // manager_idごとの総担当ライバー数
+  const totalLiversByMgr: Record<number, number> = {}
+  for (const l of (allLiversRaw ?? [])) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row = l as any
+    if (row.manager_id) totalLiversByMgr[row.manager_id] = (totalLiversByMgr[row.manager_id] ?? 0) + 1
   }
+
+  const mgrMap: Record<number, ManagerAgg & { achieveArr: number[] }> = {}
+  for (const r of (statsRaw ?? [])) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row = r as any
+    const liver = Array.isArray(row.livers) ? row.livers[0] : row.livers
+    const manager = Array.isArray(liver?.managers) ? liver?.managers[0] : liver?.managers
+    if (!manager) continue
+    const mid = manager.id as number
+    if (!mgrMap[mid]) {
+      mgrMap[mid] = {
+        manager_id: mid,
+        manager_name: (manager.name ?? manager.email ?? '不明') as string,
+        total_livers: totalLiversByMgr[mid] ?? 0,
+        active_livers: 0,
+        total_diamonds: 0,
+        total_lives: 0,
+        valid_days: 0,
+        followers: 0,
+        pk_count: 0,
+        avg_achieve: 0,
+        achieveArr: [],
+      }
+    }
+    const d = row.diamonds ?? 0
+    const lc = row.live_count ?? 0
+    mgrMap[mid].total_diamonds += d
+    mgrMap[mid].total_lives    += lc
+    mgrMap[mid].valid_days     += row.valid_live_days ?? 0
+    mgrMap[mid].followers      += row.new_followers ?? 0
+    mgrMap[mid].pk_count       += row.pk_count ?? 0
+    if (d > 0 || lc > 0) mgrMap[mid].active_livers += 1
+    if ((row.diamond_achieve ?? 0) > 0) mgrMap[mid].achieveArr.push(row.diamond_achieve)
+  }
+
+  const mgrData: ManagerAgg[] = Object.values(mgrMap).map((m) => {
+    const avg = m.achieveArr.length > 0
+      ? m.achieveArr.reduce((s, v) => s + v, 0) / m.achieveArr.length
+      : 0
+    return { ...m, avg_achieve: parseFloat(avg.toFixed(1)) }
+  })
   mgrData.sort((a, b) => b.total_diamonds - a.total_diamonds)
 
   const chartData = mgrData.filter((m) => m.total_diamonds >= 1)
@@ -94,6 +122,7 @@ export default async function ManagersPage({
       .from('livers')
       .select('username, joined_date, monthly_stats(period, diamonds, live_count, valid_live_days, live_time_min, pk_count, new_followers, rank_status, diamond_achieve), agency_revenue(period, streamer_revenue, agency_total_payout)')
       .eq('manager_id', selectedMgrId)
+      .limit(200)
     const daysInMonth = new Date(
       parseInt(selectedPeriod.split('-')[0]),
       parseInt(selectedPeriod.split('-')[1]),
