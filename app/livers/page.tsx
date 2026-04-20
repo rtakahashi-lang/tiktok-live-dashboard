@@ -100,9 +100,6 @@ export default async function LiversPage({
             name="liver_id"
             className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#fe2c55]"
             defaultValue={selectedLiverId ?? ''}
-            onChange={(e) => {
-              // クライアントコンポーネントではないため、フォーム送信で対応
-            }}
           >
             {liversList.map((l) => (
               <option key={l.liver_id} value={l.liver_id}>
