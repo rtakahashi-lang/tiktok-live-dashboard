@@ -268,6 +268,15 @@ export default async function OverviewPage({
 
         <ProgressBar current={monthTotal} goal={currentGoal} />
 
+        <div className="mt-4">
+          <DailyDiamondsChart
+            currentData={dailyData}
+            prevData={prevDailyData}
+            currentPeriod={currentPeriod}
+            prevPeriod={prevPeriod}
+          />
+        </div>
+
         {eventsForGantt.length > 0 && (
           <div className="mt-3">
             <EventGanttChart
@@ -277,15 +286,6 @@ export default async function OverviewPage({
             />
           </div>
         )}
-
-        <div className="mt-4">
-          <DailyDiamondsChart
-            currentData={dailyData}
-            prevData={prevDailyData}
-            currentPeriod={currentPeriod}
-            prevPeriod={prevPeriod}
-          />
-        </div>
       </div>
 
       <hr className="border-gray-200" />
