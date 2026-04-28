@@ -53,21 +53,17 @@ export const getMonthEvents = unstable_cache(
   { revalidate: 300 }
 )
 
-/** 月次ダイヤ日次データ */
-export const getDailyDiamonds = unstable_cache(
-  async (period: string) => {
-    const supabase = createServerClient()
-    const { data } = await supabase
-      .from('daily_diamonds')
-      .select('date, diamonds')
-      .like('date', `${period}%`)
-      .order('date')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (data ?? []) as any[]
-  },
-  ['daily_diamonds'],
-  { revalidate: 120 }  // 日次は2分キャッシュ
-)
+/** 月次ダイヤ日次データ（キャッシュなし：入力後すぐ反映） */
+export async function getDailyDiamonds(period: string) {
+  const supabase = createServerClient()
+  const { data } = await supabase
+    .from('daily_diamonds')
+    .select('date, diamonds')
+    .like('date', `${period}%`)
+    .order('date')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (data ?? []) as any[]
+}
 
 /** 月次目標 */
 export const getMonthlyGoals = unstable_cache(
