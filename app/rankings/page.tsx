@@ -11,7 +11,8 @@ const getAllTrendData = unstable_cache(
       .from('monthly_stats')
       .select('period, liver_id, diamonds, pk_diamonds, live_count, livers(joined_date)')
       .limit(5000)
-    return (data ?? []) as { period: string; liver_id: number; diamonds: number; pk_diamonds: number; live_count: number; livers: { joined_date: string } | null }[]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (data ?? []) as any[]
   },
   ['all_trend_data'],
   { revalidate: 300 }
