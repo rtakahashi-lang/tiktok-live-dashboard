@@ -1,18 +1,8 @@
 export const dynamic = 'force-dynamic'
 
 import { createServerClient } from '@/lib/supabase-server'
-import { unstable_cache } from 'next/cache'
+import { getAllTrendData } from '@/lib/cached-queries'
 import { Suspense } from 'react'
-
-const getAllTrendData = unstable_cache(
-  async () => {
-    const supabase = createServerClient()
-    const { data } = await supabase.from('monthly_stats').select('period').limit(5000)
-    return data ?? []
-  },
-  ['all_trend_data'],
-  { revalidate: 300 }
-)
 import PeriodSelector from '@/components/ui/PeriodSelector'
 import KpiCard from '@/components/ui/KpiCard'
 import { DiamondTrendChart, ActivityTrendChart } from '@/components/charts/LiverTrendChart'

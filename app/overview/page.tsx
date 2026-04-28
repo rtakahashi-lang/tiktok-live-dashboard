@@ -1,8 +1,7 @@
 export const dynamic = 'force-dynamic'
 
-import { createServerClient } from '@/lib/supabase-server'
-import { unstable_cache } from 'next/cache'
 import { Suspense } from 'react'
+import { getAllTrendData, getPeriodStats, getMonthEvents, getDailyDiamonds, getMonthlyGoals, getLiversCount } from '@/lib/cached-queries'
 import KpiCard from '@/components/ui/KpiCard'
 import ProgressBar from '@/components/ui/ProgressBar'
 import PeriodSelector from '@/components/ui/PeriodSelector'
@@ -23,26 +22,11 @@ function SectionTitle({ label, color = '#fe2c55' }: { label: string; color?: str
   )
 }
 
-// 全期間トレンドデータ（5分キャッシュ）
-const getAllTrendData = unstable_cache(
-  async () => {
-    const supabase = createServerClient()
-    const { data } = await supabase
-      .from('monthly_stats')
-      .select('period, liver_id, diamonds, pk_diamonds, live_count, livers(joined_date)')
-      .limit(5000)
-    return data ?? []
-  },
-  ['all_trend_data'],
-  { revalidate: 300 }
-)
-
 export default async function OverviewPage({
   searchParams,
 }: {
   searchParams: Promise<{ period?: string }>
 }) {
-  const supabase = createServerClient()
   const params = await searchParams
 
   const today = new Date()
@@ -53,72 +37,57 @@ export default async function OverviewPage({
   const monthStart = `${currentPeriod}-01`
   const monthEnd   = `${currentPeriod}-${String(daysInCurrent).padStart(2, '0')}`
 
-  // ── 全クエリを完全並列実行（1ラウンド）───────────────────────────────
-  // getAllTrendDataはキャッシュ済みなので期間リストの導出に利用
-  // params.periodがあればそのまま使い、なければtrendから最新期間を算出
+  // 全クエリを並列実行（キャッシュ済み関数）
   const [
-    { data: goalData },
-    { data: dailyRaw },
-    { data: prevDailyRaw },
-    { data: eventsRaw },
-    { count: totalLivers },
-    { data: goalsForPeriods },
     allTrendRaw,
+    goalsAll,
+    dailyRaw,
+    prevDailyRaw,
+    eventsRaw,
+    totalLivers,
   ] = await Promise.all([
-    supabase.from('monthly_goals').select('*').eq('period', currentPeriod).maybeSingle(),
-    supabase.from('daily_diamonds').select('date, diamonds').like('date', `${currentPeriod}%`).order('date'),
-    supabase.from('daily_diamonds').select('date, diamonds').like('date', `${prevPeriod}%`).order('date'),
-    supabase.from('events').select('name, category, start_date, end_date, event_date')
-      .lte('start_date', monthEnd).gte('end_date', monthStart).order('start_date'),
-    supabase.from('livers').select('id', { count: 'exact', head: true }),
-    supabase.from('monthly_goals').select('period, new_registrations'),
     getAllTrendData(),
+    getMonthlyGoals(),
+    getDailyDiamonds(currentPeriod),
+    getDailyDiamonds(prevPeriod),
+    getMonthEvents(monthStart, monthEnd),
+    getLiversCount(),
   ])
 
-  // trendデータから期間リストを導出（DBクエリ不要）
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const trendRows = allTrendRaw as any[]
-  const periods = [...new Set(trendRows.map((r) => r.period as string))].sort().reverse()
+  // 期間リストと選択期間を確定
+  const periods = [...new Set(allTrendRaw.map((r) => r.period as string))].sort().reverse()
   const selectedPeriod = params.period ?? periods[0] ?? currentPeriod
 
-  // 選択期間の月次データのみ追加取得（期間確定後に1クエリ）
-  const [{ data: periodStatsRaw }, { data: newRegData }] = await Promise.all([
-    supabase
-      .from('monthly_stats')
-      .select('diamonds, live_time_min, live_count, pk_count, new_followers, diamond_achieve, pk_diamonds, rank_status, liver_id, livers(display_name, username, group_name)')
-      .eq('period', selectedPeriod)
-      .limit(2000),
-    supabase.from('monthly_goals').select('new_registrations').eq('period', selectedPeriod).maybeSingle(),
-  ])
+  // 選択期間のKPIデータ（キャッシュ付き）
+  const kpiRows = await getPeriodStats(selectedPeriod)
 
-  // ── 今月の進捗 ────────────────────────────────────────────────────
-  const currentGoal   = goalData?.target_diamonds ?? 0
-  const currentRevenue = goalData?.target_revenue ?? 0
+  // ── 今月の進捗 ───────────────────────────────────────────────────
+  const currentGoal    = goalsAll.find((g) => g.period === currentPeriod)?.target_diamonds ?? 0
+  const currentRevenue = goalsAll.find((g) => g.period === currentPeriod)?.target_revenue ?? 0
+  const newRegistrations = goalsAll.find((g) => g.period === selectedPeriod)?.new_registrations ?? 0
 
-  const dailyData = (dailyRaw ?? []).map((r: { date: string; diamonds: number }) => ({
+  const dailyData = dailyRaw.map((r: { date: string; diamonds: number }) => ({
     day: parseInt(r.date.split('-')[2], 10),
     diamonds: r.diamonds,
   }))
-  const prevDailyData = (prevDailyRaw ?? []).map((r: { date: string; diamonds: number }) => ({
+  const prevDailyData = prevDailyRaw.map((r: { date: string; diamonds: number }) => ({
     day: parseInt(r.date.split('-')[2], 10),
     diamonds: r.diamonds,
   }))
   const monthTotal = dailyData.reduce((s, d) => s + d.diamonds, 0)
-  const latestDate = dailyRaw && dailyRaw.length > 0 ? dailyRaw[dailyRaw.length - 1].date : null
+  const latestDate = dailyRaw.length > 0 ? dailyRaw[dailyRaw.length - 1].date : null
   const asOfLabel = latestDate
     ? `${parseInt(latestDate.split('-')[1])}月${parseInt(latestDate.split('-')[2])}日時点`
     : 'データなし'
 
-  const eventsForGantt = (eventsRaw ?? []).map((e: { name: string; category: string; start_date: string | null; end_date: string | null; event_date: string }) => ({
+  const eventsForGantt = eventsRaw.map((e: { name: string; category: string; start_date: string | null; end_date: string | null; event_date: string }) => ({
     name: e.name,
     category: e.category ?? 'tiktok',
     start_date: e.start_date ?? e.event_date,
     end_date: e.end_date ?? e.event_date,
   }))
 
-  // ── 選択月KPI（periodStatsRaw から派生）─────────────────────────────
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const kpiRows = (periodStatsRaw ?? []) as any[]
+  // ── 選択月KPI ────────────────────────────────────────────────────
   const totalDiamonds  = kpiRows.reduce((s, r) => s + (r.diamonds ?? 0), 0)
   const totalLiveMin   = kpiRows.reduce((s, r) => s + (r.live_time_min ?? 0), 0)
   const totalLives     = kpiRows.reduce((s, r) => s + (r.live_count ?? 0), 0)
@@ -126,7 +95,6 @@ export default async function OverviewPage({
   const totalFollowers = kpiRows.reduce((s, r) => s + (r.new_followers ?? 0), 0)
   const activeLivers   = new Set(kpiRows.filter((r) => (r.live_count ?? 0) > 0 || (r.diamonds ?? 0) > 0).map((r) => r.liver_id)).size
   const avgMin         = activeLivers > 0 ? Math.floor(totalLiveMin / activeLivers) : 0
-  const newRegistrations = newRegData?.new_registrations ?? 0
 
   // TOP10
   const top10 = [...kpiRows]
@@ -140,8 +108,7 @@ export default async function OverviewPage({
   // ランクステータス分布
   const rankMap: Record<string, number> = {}
   for (const r of kpiRows) {
-    const rs = r.rank_status
-    if (rs) rankMap[rs] = (rankMap[rs] ?? 0) + 1
+    if (r.rank_status) rankMap[r.rank_status] = (rankMap[r.rank_status] ?? 0) + 1
   }
   const rankData = Object.entries(rankMap).map(([rank_status, count]) => ({ rank_status, count }))
 
@@ -167,19 +134,16 @@ export default async function OverviewPage({
     }))
 
   // ── トレンド（キャッシュ済み全期間データから派生）────────────────────
-
-  // 月別ダイヤ推移
   const monthlyMap: Record<string, { period: string; diamonds: number; pk_diamonds: number }> = {}
-  for (const r of trendRows) {
+  for (const r of allTrendRaw) {
     if (!monthlyMap[r.period]) monthlyMap[r.period] = { period: r.period, diamonds: 0, pk_diamonds: 0 }
     monthlyMap[r.period].diamonds    += r.diamonds    ?? 0
     monthlyMap[r.period].pk_diamonds += r.pk_diamonds ?? 0
   }
   const monthlyTrend = Object.values(monthlyMap).sort((a, b) => a.period.localeCompare(b.period))
 
-  // 稼働ライバー数推移
   const activeByPeriod: Record<string, Set<number>> = {}
-  for (const r of trendRows) {
+  for (const r of allTrendRaw) {
     if (!activeByPeriod[r.period]) activeByPeriod[r.period] = new Set()
     if ((r.live_count ?? 0) > 0 || (r.diamonds ?? 0) > 0) activeByPeriod[r.period].add(r.liver_id)
   }
@@ -187,14 +151,10 @@ export default async function OverviewPage({
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([period, set]) => ({ period, active_livers: set.size }))
 
-  // 新規ライバー獲得ダイヤ推移
   const goalsMap: Record<string, number> = {}
-  for (const g of (goalsForPeriods ?? [])) {
-    const gr = g as { period: string; new_registrations: number }
-    goalsMap[gr.period] = gr.new_registrations ?? 0
-  }
+  for (const g of goalsAll) goalsMap[g.period] = g.new_registrations ?? 0
   const newLiversMap: Record<string, { diamonds: number; count: number }> = {}
-  for (const r of trendRows) {
+  for (const r of allTrendRaw) {
     const liver = Array.isArray(r.livers) ? r.livers[0] : r.livers
     const jd = liver?.joined_date as string | undefined
     if (jd && jd.startsWith(r.period)) {
@@ -279,7 +239,7 @@ export default async function OverviewPage({
           <KpiCard
             label="🎙 稼働ライバー数"
             value={`${activeLivers}`}
-            sub={`全体 ${totalLivers ?? 0}人`}
+            sub={`全体 ${totalLivers}人`}
             color="#2196f3"
           />
           <KpiCard label="🆕 新規登録人数" value={`${newRegistrations}人`} color="#4caf50" />
