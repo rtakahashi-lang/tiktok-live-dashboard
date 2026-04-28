@@ -23,21 +23,20 @@ export default async function ManagersPage({
   const supabase = createServerClient()
   const params = await searchParams
 
-  const { data: periodsRaw } = await supabase.from('monthly_stats').select('period')
+  // Round 1: 期間リスト
+  const { data: periodsRaw } = await supabase.from('monthly_stats').select('period').limit(500)
   const periods = [...new Set((periodsRaw ?? []).map((r: { period: string }) => r.period))].sort().reverse() as string[]
   const selectedPeriod = params.period ?? periods[0] ?? ''
 
-  // マネージャー別集計: monthly_statsからlivers→managersを経由して集計
-  const { data: statsRaw } = await supabase
-    .from('monthly_stats')
-    .select('liver_id, diamonds, live_count, valid_live_days, new_followers, pk_count, diamond_achieve, livers(id, manager_id, managers(id, name, email))')
-    .eq('period', selectedPeriod)
-    .limit(2000)
-
-  // livers一覧（全期間、担当数カウント用）
-  const { data: allLiversRaw } = await supabase
-    .from('livers')
-    .select('id, manager_id')
+  // Round 2: 並列取得
+  const [{ data: statsRaw }, { data: allLiversRaw }] = await Promise.all([
+    supabase
+      .from('monthly_stats')
+      .select('liver_id, diamonds, live_count, valid_live_days, new_followers, pk_count, diamond_achieve, livers(id, manager_id, managers(id, name, email))')
+      .eq('period', selectedPeriod)
+      .limit(2000),
+    supabase.from('livers').select('id, manager_id'),
+  ])
 
   type ManagerAgg = {
     manager_id: number

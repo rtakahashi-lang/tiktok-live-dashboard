@@ -30,17 +30,24 @@ export default async function RankingsPage({
   const supabase = createServerClient()
   const params = await searchParams
 
-  const { data: periodsRaw } = await supabase.from('monthly_stats').select('period')
+  // Round 1: 期間リスト
+  const { data: periodsRaw } = await supabase.from('monthly_stats').select('period').limit(500)
   const periods = [...new Set((periodsRaw ?? []).map((r: { period: string }) => r.period))].sort().reverse() as string[]
   const selectedPeriod = params.period ?? periods[0] ?? ''
   const activeTab = params.tab ?? 'diamonds'
 
-  // 全ライバー月次データ（livers経由でagency_revenueを取得）
-  const { data: rankRaw } = await supabase
-    .from('monthly_stats')
-    .select('liver_id, diamonds, live_count, valid_live_days, live_time_min, pk_count, new_followers, diamond_achieve, rank_status, livers(display_name, username, group_name, managers(name, email), agency_revenue(period, streamer_revenue, agency_total_payout))')
-    .eq('period', selectedPeriod)
-    .limit(2000)
+  // Round 2: 並列取得
+  const [{ data: rankRaw }, { data: goalsRaw }] = await Promise.all([
+    supabase
+      .from('monthly_stats')
+      .select('liver_id, diamonds, live_count, valid_live_days, live_time_min, pk_count, new_followers, diamond_achieve, rank_status, livers(display_name, username, group_name, managers(name, email), agency_revenue(period, streamer_revenue, agency_total_payout))')
+      .eq('period', selectedPeriod)
+      .limit(2000),
+    supabase
+      .from('goals')
+      .select('id, liver_id, manager_id, metric, target, livers(display_name, username), managers(name, email)')
+      .eq('period', selectedPeriod),
+  ])
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rankData = (rankRaw ?? []).map((r: any) => {
@@ -66,11 +73,7 @@ export default async function RankingsPage({
     }
   })
 
-  // 目標達成状況
-  const { data: goalsRaw } = await supabase
-    .from('goals')
-    .select('id, liver_id, manager_id, metric, target, livers(display_name, username), managers(name, email)')
-    .eq('period', selectedPeriod)
+
 
   // ソート
   const sortedByDiamonds    = [...rankData].sort((a, b) => b.diamonds - a.diamonds)

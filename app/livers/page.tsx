@@ -23,16 +23,29 @@ export default async function LiversPage({
   const supabase = createServerClient()
   const params = await searchParams
 
-  const { data: periodsRaw } = await supabase.from('monthly_stats').select('period')
+  // Round 1: 期間リスト
+  const { data: periodsRaw } = await supabase.from('monthly_stats').select('period').limit(500)
   const periods = [...new Set((periodsRaw ?? []).map((r: { period: string }) => r.period))].sort().reverse() as string[]
   const selectedPeriod = params.period ?? periods[0] ?? ''
+  const selectedLiverId = params.liver_id ? parseInt(params.liver_id, 10) : null
+  const activeTab = params.tab ?? 'diamonds'
 
-  // ライバー一覧
-  const { data: liversRaw } = await supabase
-    .from('monthly_stats')
-    .select('liver_id, diamonds, live_count, valid_live_days, live_time_min, pk_count, new_followers, rank_status, livers(username, display_name, joined_date, managers(name, email))')
-    .eq('period', selectedPeriod)
-    .order('diamonds', { ascending: false })
+  // Round 2: 一覧 + 履歴を並列取得
+  const [{ data: liversRaw }, { data: historyRaw }] = await Promise.all([
+    supabase
+      .from('monthly_stats')
+      .select('liver_id, diamonds, live_count, valid_live_days, live_time_min, pk_count, new_followers, rank_status, livers(username, display_name, joined_date, managers(name, email))')
+      .eq('period', selectedPeriod)
+      .order('diamonds', { ascending: false })
+      .limit(2000),
+    selectedLiverId
+      ? supabase
+          .from('monthly_stats')
+          .select('period, diamonds, pk_diamonds, live_count, valid_live_days, pk_count')
+          .eq('liver_id', selectedLiverId)
+          .order('period')
+      : Promise.resolve({ data: null }),
+  ])
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const liversList = (liversRaw ?? []).map((r: any) => {
@@ -55,33 +68,18 @@ export default async function LiversPage({
     }
   })
 
-  // 選択中のライバー
-  const selectedLiverId = params.liver_id ? parseInt(params.liver_id, 10) : liversList[0]?.liver_id ?? null
-  const activeTab = params.tab ?? 'diamonds'
+  // 選択ライバー（URLになければ先頭）
+  const resolvedLiverId = selectedLiverId ?? liversList[0]?.liver_id ?? null
+  const latestStats = liversList.find((l) => l.liver_id === resolvedLiverId)
 
-  let history: {
-    period: string; diamonds: number; pk_diamonds: number;
-    live_count: number; valid_live_days: number; pk_count: number
-  }[] = []
-  let latestStats: typeof liversList[0] | undefined
-
-  if (selectedLiverId) {
-    const { data: historyRaw } = await supabase
-      .from('monthly_stats')
-      .select('period, diamonds, pk_diamonds, live_count, valid_live_days, pk_count')
-      .eq('liver_id', selectedLiverId)
-      .order('period')
-    history = (historyRaw ?? []).map((r: { period: string; diamonds: number; pk_diamonds: number; live_count: number; valid_live_days: number; pk_count: number }) => ({
-      period: r.period,
-      diamonds: r.diamonds ?? 0,
-      pk_diamonds: r.pk_diamonds ?? 0,
-      live_count: r.live_count ?? 0,
-      valid_live_days: r.valid_live_days ?? 0,
-      pk_count: r.pk_count ?? 0,
-    }))
-    latestStats = liversList.find((l) => l.liver_id === selectedLiverId)
-  }
-
+  const history = (historyRaw ?? []).map((r: { period: string; diamonds: number; pk_diamonds: number; live_count: number; valid_live_days: number; pk_count: number }) => ({
+    period: r.period,
+    diamonds: r.diamonds ?? 0,
+    pk_diamonds: r.pk_diamonds ?? 0,
+    live_count: r.live_count ?? 0,
+    valid_live_days: r.valid_live_days ?? 0,
+    pk_count: r.pk_count ?? 0,
+  }))
   return (
     <div className="space-y-6">
       {/* ライバー詳細 */}
@@ -99,7 +97,7 @@ export default async function LiversPage({
           <select
             name="liver_id"
             className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#fe2c55]"
-            defaultValue={selectedLiverId ?? ''}
+            defaultValue={resolvedLiverId ?? ''}
           >
             {liversList.map((l) => (
               <option key={l.liver_id} value={l.liver_id}>
@@ -133,7 +131,7 @@ export default async function LiversPage({
           ].map(({ key, label }) => (
             <a
               key={key}
-              href={`?period=${selectedPeriod}&liver_id=${selectedLiverId}&tab=${key}`}
+              href={`?period=${selectedPeriod}&liver_id=${resolvedLiverId}&tab=${key}`}
               className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
                 activeTab === key
                   ? 'bg-[#fe2c55] text-white'
