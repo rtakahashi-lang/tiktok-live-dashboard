@@ -9,12 +9,22 @@ import { createServerClient } from './supabase-server'
 export const getAllTrendData = unstable_cache(
   async () => {
     const supabase = createServerClient()
-    const { data } = await supabase
-      .from('monthly_stats')
-      .select('period, liver_id, diamonds, pk_diamonds, live_count, livers(joined_date)')
-      .limit(5000)
+    const PAGE = 1000
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (data ?? []) as any[]
+    let all: any[] = []
+    let from = 0
+    while (true) {
+      const { data } = await supabase
+        .from('monthly_stats')
+        .select('period, liver_id, diamonds, pk_diamonds, live_count, livers(joined_date)')
+        .order('id')
+        .range(from, from + PAGE - 1)
+      if (!data || data.length === 0) break
+      all = all.concat(data)
+      if (data.length < PAGE) break
+      from += PAGE
+    }
+    return all
   },
   ['all_trend_data'],
   { revalidate: 300 }
@@ -24,13 +34,23 @@ export const getAllTrendData = unstable_cache(
 export const getPeriodStats = unstable_cache(
   async (period: string) => {
     const supabase = createServerClient()
-    const { data } = await supabase
-      .from('monthly_stats')
-      .select('diamonds, live_time_min, live_count, pk_count, new_followers, diamond_achieve, pk_diamonds, rank_status, liver_id, livers(display_name, username, group_name, managers(name, email), agency_revenue(period, streamer_revenue, agency_total_payout))')
-      .eq('period', period)
-      .limit(2000)
+    const PAGE = 1000
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (data ?? []) as any[]
+    let all: any[] = []
+    let from = 0
+    while (true) {
+      const { data } = await supabase
+        .from('monthly_stats')
+        .select('diamonds, live_time_min, live_count, pk_count, new_followers, diamond_achieve, pk_diamonds, rank_status, liver_id, livers(display_name, username, group_name, managers(name, email), agency_revenue(period, streamer_revenue, agency_total_payout))')
+        .eq('period', period)
+        .order('id')
+        .range(from, from + PAGE - 1)
+      if (!data || data.length === 0) break
+      all = all.concat(data)
+      if (data.length < PAGE) break
+      from += PAGE
+    }
+    return all
   },
   ['period_stats'],
   { revalidate: 300 }
