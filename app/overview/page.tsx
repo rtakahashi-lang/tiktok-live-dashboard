@@ -53,36 +53,42 @@ export default async function OverviewPage({
   const monthStart = `${currentPeriod}-01`
   const monthEnd   = `${currentPeriod}-${String(daysInCurrent).padStart(2, '0')}`
 
-  // ── Round 1: 期間リスト（selectedPeriod確定に必要）──────────────────
-  const { data: periodsRaw } = await supabase.from('monthly_stats').select('period').limit(500)
-  const periods = [...new Set((periodsRaw ?? []).map((r: { period: string }) => r.period))].sort().reverse() as string[]
-  const selectedPeriod = params.period ?? periods[0] ?? currentPeriod
-
-  // ── Round 2: 残り全クエリを並列実行 ─────────────────────────────────
+  // ── 全クエリを完全並列実行（1ラウンド）───────────────────────────────
+  // getAllTrendDataはキャッシュ済みなので期間リストの導出に利用
+  // params.periodがあればそのまま使い、なければtrendから最新期間を算出
   const [
     { data: goalData },
     { data: dailyRaw },
     { data: prevDailyRaw },
     { data: eventsRaw },
-    { data: periodStatsRaw },   // KPI + top10 + group + rank を1クエリで
     { count: totalLivers },
-    { data: newRegData },
     { data: goalsForPeriods },
-    allTrendRaw,                // キャッシュ付き全期間トレンド
+    allTrendRaw,
   ] = await Promise.all([
     supabase.from('monthly_goals').select('*').eq('period', currentPeriod).maybeSingle(),
     supabase.from('daily_diamonds').select('date, diamonds').like('date', `${currentPeriod}%`).order('date'),
     supabase.from('daily_diamonds').select('date, diamonds').like('date', `${prevPeriod}%`).order('date'),
     supabase.from('events').select('name, category, start_date, end_date, event_date')
       .lte('start_date', monthEnd).gte('end_date', monthStart).order('start_date'),
-    supabase.from('monthly_stats')
+    supabase.from('livers').select('id', { count: 'exact', head: true }),
+    supabase.from('monthly_goals').select('period, new_registrations'),
+    getAllTrendData(),
+  ])
+
+  // trendデータから期間リストを導出（DBクエリ不要）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const trendRows = allTrendRaw as any[]
+  const periods = [...new Set(trendRows.map((r) => r.period as string))].sort().reverse()
+  const selectedPeriod = params.period ?? periods[0] ?? currentPeriod
+
+  // 選択期間の月次データのみ追加取得（期間確定後に1クエリ）
+  const [{ data: periodStatsRaw }, { data: newRegData }] = await Promise.all([
+    supabase
+      .from('monthly_stats')
       .select('diamonds, live_time_min, live_count, pk_count, new_followers, diamond_achieve, pk_diamonds, rank_status, liver_id, livers(display_name, username, group_name)')
       .eq('period', selectedPeriod)
       .limit(2000),
-    supabase.from('livers').select('id', { count: 'exact', head: true }),
     supabase.from('monthly_goals').select('new_registrations').eq('period', selectedPeriod).maybeSingle(),
-    supabase.from('monthly_goals').select('period, new_registrations'),
-    getAllTrendData(),
   ])
 
   // ── 今月の進捗 ────────────────────────────────────────────────────
@@ -161,8 +167,6 @@ export default async function OverviewPage({
     }))
 
   // ── トレンド（キャッシュ済み全期間データから派生）────────────────────
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const trendRows = allTrendRaw as any[]
 
   // 月別ダイヤ推移
   const monthlyMap: Record<string, { period: string; diamonds: number; pk_diamonds: number }> = {}

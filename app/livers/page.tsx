@@ -1,7 +1,18 @@
 export const dynamic = 'force-dynamic'
 
 import { createServerClient } from '@/lib/supabase-server'
+import { unstable_cache } from 'next/cache'
 import { Suspense } from 'react'
+
+const getAllTrendData = unstable_cache(
+  async () => {
+    const supabase = createServerClient()
+    const { data } = await supabase.from('monthly_stats').select('period').limit(5000)
+    return data ?? []
+  },
+  ['all_trend_data'],
+  { revalidate: 300 }
+)
 import PeriodSelector from '@/components/ui/PeriodSelector'
 import KpiCard from '@/components/ui/KpiCard'
 import { DiamondTrendChart, ActivityTrendChart } from '@/components/charts/LiverTrendChart'
@@ -23,14 +34,15 @@ export default async function LiversPage({
   const supabase = createServerClient()
   const params = await searchParams
 
-  // Round 1: 期間リスト
-  const { data: periodsRaw } = await supabase.from('monthly_stats').select('period').limit(500)
-  const periods = [...new Set((periodsRaw ?? []).map((r: { period: string }) => r.period))].sort().reverse() as string[]
-  const selectedPeriod = params.period ?? periods[0] ?? ''
   const selectedLiverId = params.liver_id ? parseInt(params.liver_id, 10) : null
   const activeTab = params.tab ?? 'diamonds'
 
-  // Round 2: 一覧 + 履歴を並列取得
+  // キャッシュ済みデータから期間リスト導出
+  const cachedTrend = await getAllTrendData()
+  const periods = [...new Set(cachedTrend.map((r: { period: string }) => r.period))].sort().reverse()
+  const selectedPeriod = params.period ?? periods[0] ?? ''
+
+  // 一覧 + 履歴を並列取得
   const [{ data: liversRaw }, { data: historyRaw }] = await Promise.all([
     supabase
       .from('monthly_stats')

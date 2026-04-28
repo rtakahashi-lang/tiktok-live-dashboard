@@ -1,7 +1,21 @@
 export const dynamic = 'force-dynamic'
 
 import { createServerClient } from '@/lib/supabase-server'
+import { unstable_cache } from 'next/cache'
 import { Suspense } from 'react'
+
+const getAllTrendData = unstable_cache(
+  async () => {
+    const supabase = createServerClient()
+    const { data } = await supabase
+      .from('monthly_stats')
+      .select('period, liver_id, diamonds, pk_diamonds, live_count, livers(joined_date)')
+      .limit(5000)
+    return (data ?? []) as { period: string; liver_id: number; diamonds: number; pk_diamonds: number; live_count: number; livers: { joined_date: string } | null }[]
+  },
+  ['all_trend_data'],
+  { revalidate: 300 }
+)
 import PeriodSelector from '@/components/ui/PeriodSelector'
 import RankingBarChart from '@/components/charts/RankingBarChart'
 
@@ -30,13 +44,13 @@ export default async function RankingsPage({
   const supabase = createServerClient()
   const params = await searchParams
 
-  // Round 1: 期間リスト
-  const { data: periodsRaw } = await supabase.from('monthly_stats').select('period').limit(500)
-  const periods = [...new Set((periodsRaw ?? []).map((r: { period: string }) => r.period))].sort().reverse() as string[]
-  const selectedPeriod = params.period ?? periods[0] ?? ''
   const activeTab = params.tab ?? 'diamonds'
 
-  // Round 2: 並列取得
+  // キャッシュ済みトレンドから期間リスト導出 → 全クエリ並列
+  const cachedTrend = await getAllTrendData()
+  const periods = [...new Set(cachedTrend.map((r: { period: string }) => r.period))].sort().reverse()
+  const selectedPeriod = params.period ?? periods[0] ?? ''
+
   const [{ data: rankRaw }, { data: goalsRaw }] = await Promise.all([
     supabase
       .from('monthly_stats')

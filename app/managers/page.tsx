@@ -1,7 +1,18 @@
 export const dynamic = 'force-dynamic'
 
 import { createServerClient } from '@/lib/supabase-server'
+import { unstable_cache } from 'next/cache'
 import { Suspense } from 'react'
+
+const getAllTrendData = unstable_cache(
+  async () => {
+    const supabase = createServerClient()
+    const { data } = await supabase.from('monthly_stats').select('period').limit(5000)
+    return data ?? []
+  },
+  ['all_trend_data'],
+  { revalidate: 300 }
+)
 import PeriodSelector from '@/components/ui/PeriodSelector'
 import ManagerPieChart from '@/components/charts/ManagerPieChart'
 import RankingBarChart  from '@/components/charts/RankingBarChart'
@@ -23,12 +34,11 @@ export default async function ManagersPage({
   const supabase = createServerClient()
   const params = await searchParams
 
-  // Round 1: 期間リスト
-  const { data: periodsRaw } = await supabase.from('monthly_stats').select('period').limit(500)
-  const periods = [...new Set((periodsRaw ?? []).map((r: { period: string }) => r.period))].sort().reverse() as string[]
+  // キャッシュ済みデータから期間リスト導出 → 並列取得
+  const cachedTrend = await getAllTrendData()
+  const periods = [...new Set(cachedTrend.map((r: { period: string }) => r.period))].sort().reverse()
   const selectedPeriod = params.period ?? periods[0] ?? ''
 
-  // Round 2: 並列取得
   const [{ data: statsRaw }, { data: allLiversRaw }] = await Promise.all([
     supabase
       .from('monthly_stats')
